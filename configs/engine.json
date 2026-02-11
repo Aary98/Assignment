@@ -1,0 +1,28 @@
+{
+    "data_file": "data/ohlc_clean.csv",
+    "start_equity": 100000,
+    "regime_classifier": {
+      "atr_window": 14,
+      "trend_ma": 50
+    },
+    "strategies": {
+      "trend_following": {
+        "enabled": true,
+        "logic_id": "STRAT_1",
+        "params": {
+          "fast_ma": 20,
+          "slow_ma": 50
+        }
+      },
+      "mean_reversion": {
+        "enabled": true,
+        "logic_id": "STRAT_2",
+        "params": {
+          "rsi_window": 14,
+          "rsi_buy": 30,
+          "rsi_sell": 70
+        }
+      }
+    }
+  }
+  
