@@ -1,66 +1,97 @@
-import pandas as pd
+import argparse
 import json
-import sys
+import pandas as pd
 from engine.regimes.logic import detect_regime
-from engine.strategies.trend_following import STRAT_1
+from engine.strategy_loader import load_strategy_class
 
 
-with open("configs/engine.json") as f:
-    config = json.load(f)
+def load_config(path: str) -> dict:
+    with open(path, "r") as f:
+        return json.load(f)
 
 
-df = pd.read_csv(config["data_file"])
-df["date"] = pd.to_datetime(df["date"])
-df = df.sort_values("date")
-
-trades = []
-
-position = 0
-entry_price = 0
-entry_date = None
-
-
-for i in range(60, len(df)-1):
-
-    df_slice = df.iloc[:i]
-
-    regime = detect_regime(df_slice, config["regime_classifier"])
+def main(config_path: str):
 
     
-    strategy = STRAT_1(config["strategies"]["trend_following"]["params"])
+    config = load_config(config_path)
 
-    signals = strategy.generate_signals(df_slice)
+   
+    df = pd.read_csv(config["data_file"])
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").reset_index(drop=True)
 
-    signal = signals["signal"].iloc[-1]
+    trades = []
+    position = None
 
-    
-    if signal == 1 and position == 0:
-        position = 1
-        entry_price = df["open"].iloc[i+1]
-        entry_date = df["date"].iloc[i+1]
+    for i in range(len(df) - 1):
 
-    
-    elif signal == -1 and position == 1:
-        exit_price = df["open"].iloc[i+1]
-        exit_date = df["date"].iloc[i+1]
+        today_slice = df.iloc[: i + 1].copy()
 
-        pnl = exit_price - entry_price
+        regime = detect_regime(today_slice, config)
 
-        trades.append({
-            "entry_dt": entry_date,
-            "entry_price": entry_price,
-            "qty": 1,
-            "side": "LONG",
-            "strategy_used": "STRAT_1",
-            "regime": regime,
-            "exit_dt": exit_date,
-            "exit_price": exit_price,
-            "pnl": pnl
-        })
 
-        position = 0
+        regime_map = {
+            "trend": "trend_following",
+            "range": "range_play",
+            "volatile": "volatility_breakout",
+            "low_vol": "mean_reversion"
+        }
 
-trades_df = pd.DataFrame(trades)
-trades_df.to_excel("outputs/orders.xlsx", index=False)
+        strategy_key = regime_map.get(regime)
 
-print("Backtest Complete! File saved in outputs/orders.xlsx")
+        strategy_config = config["strategies"].get(strategy_key)
+
+        if not strategy_config or not strategy_config["enabled"]:
+            continue
+
+        StrategyClass = load_strategy_class(strategy_config["logic_id"])
+
+        strategy = StrategyClass(strategy_config["params"])
+
+        signals_df = strategy.generate_signals(today_slice)
+
+        signal = signals_df["signal"].iloc[-1]
+
+
+        next_open = df["open"].iloc[i + 1]
+        next_date = df["date"].iloc[i + 1]
+
+        if position is None and signal == 1:
+            position = {
+                "entry_dt": next_date,
+                "entry_price": next_open,
+                "qty": 1,
+                "side": "LONG",
+                "strategy_used": strategy_config["logic_id"],
+                "regime": regime,
+                "entry_index": i + 1
+            }
+
+        elif position is not None and signal == -1:
+            exit_price = next_open
+            pnl = (exit_price - position["entry_price"]) * position["qty"]
+
+            trades.append({
+                **position,
+                "exit_dt": next_date,
+                "exit_price": exit_price,
+                "pnl": pnl,
+                "bars_held": (i + 1) - position["entry_index"]
+            })
+
+            position = None
+
+    trades_df = pd.DataFrame(trades)
+    trades_df = trades_df.sort_values("entry_dt")
+
+    trades_df.to_excel("outputs/orders.xlsx", index=False)
+
+    print("Backtest Complete! File saved in outputs/orders.xlsx")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True, help="Path to config JSON")
+    args = parser.parse_args()
+
+    main(args.config)
